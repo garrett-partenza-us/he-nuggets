@@ -1,16 +1,27 @@
+import logging
 import numpy as np
 from numpy.polynomial import Polynomial
 from numpy.polynomial import polynomial as poly
+
+# Set up logging configuration
+logging.basicConfig(
+    level=logging.INFO,  # Set the logging level
+    format='[%(levelname)s] %(message)s\n',
+    datefmt='%Y-%m-%d %H:%M:%S',  # Format for date and time
+)
+
+# Create a logger object
+logger = logging.getLogger()
 
 class Scheme():
 
     # Initialize BFV scheme parameters
     def __init__(self):
         self.n = 64 # Polynomial degree
-        self.t = 257 # Plaintext coefficient modulus
-        self.q = 65537 # Ciphertext coefficient modulus
+        self.t = 4 # Plaintext coefficient modulus
+        self.q = 65536 # Ciphertext coefficient modulus
         self.m = 0 # Error sampling mean
-        self.s = 1e-5 # Error sampling variance
+        self.s = 3.2 # Error sampling variance
         self.b = 6 * self.s # Error sampling bound
         self.croot = np.array([1] + [0] * (self.n-1) + [1]) # Cyclotomic root
 
@@ -45,7 +56,7 @@ class Plaintext():
 
 class Ciphertext():
 
-    def __init__(self, m: Plaintext, b, a):
+    def __init__(self, m: Plaintext=None, b=None, a=None, init=True):
         """
         Initialize a ciphertext polynomial.
 
@@ -54,8 +65,9 @@ class Ciphertext():
             b (np.array): Public key (b)
             a (np.array): Public key (a)
         """
-        self.m = m # Plaintext polynomial
-        self.poly = self.encrypt(b, a) # Ciphertext polynomial
+        if init:
+            self.m = m # Plaintext polynomial
+            self.poly = self.encrypt(b, a) # Ciphertext polynomial
 
     def encrypt(self, b, a):
         """
@@ -171,45 +183,110 @@ def normal_poly(size, mean, sigma):
                         sigma,
                         size=size
                     )
-                ), min=0, max=config.b
+                ), min=np.ceil(config.b/2), max=np.floor(config.b/2)
             )
 
+def add(x, y):
+
+    x_1, x_2 = x.poly
+    y_1, y_2 = y.poly
+    sum_1 = polyadd(x_1, y_1, config.q, config.croot)
+    sum_2 = polyadd(x_2, y_2, config.q, config.croot)
+    res = Ciphertext(init=False)
+    res.c1, res.c2 = sum_1, sum_2
+    return res
+
+def mul(x, y):
+    
+    x1, x2 = x.poly
+    y1, y2 = y.poly
+
+    c1n = (polymul(x1, x2, config.q, config.croot) * config.t) / config.q
+    c2n = (polyadd(
+            polymul(x1, y2, config.q, config.croot),
+            polymul(y1, x2, config.q, config.croot),
+            config.q,
+            config.croot
+        ) * config.t) / config.q
+    c3n = (polymul(y1, y2, config.q, config.croot) * config.t) / config.q
+
+    c1 = np.round(c1n).astype(np.int64) % config.q
+    c2 = np.round(c2n).astype(np.int64)% config.q
+    c3 = np.round(c3n).astype(np.int64) % config.q
+
+    return (c1, c2, c3)
+
+def relin(c1, c2, c3, eval):
+    eval, a = eval
+
+    c1_hat = polymul(eval, c3, config.q, config.croot)
+    c1_hat = polyadd(c1_hat, c1, config.q, config.croot)
+
+    c2_hat = polymul(a, c3, config.q, config.croot)
+    c2_hat = polyadd(c2_hat, c2, config.q, config.croot)
+
+    res = Ciphertext(init=False)
+    res.c1, res.c2 = c1_hat, c2_hat
+    
+    return res
 
 def key_gen():
     """
     Generate a secret key and public keys.
     """
+    # Secret
     sk = binary_poly(config.n)
+
+    # Public
     a = uniform_poly(config.n, config.q)
     e = normal_poly(config.n, config.m, config.s)
     b = polyadd(polymul(-a, sk, config.q, config.croot), -e, config.q, config.croot)
-    return (b, a), sk
+
+    # Eval
+    eval = polymul(a, sk, config.q, config.croot)
+    eval = polyadd(eval, e, config.q, config.croot)
+    eval = -1 * eval
+    eval = poly.polydiv(eval % config.q, config.croot)[1] % config.q
+    sk2 = polymul(sk, sk, config.q, config.croot)
+    eval = polyadd(eval, sk2, config.q, config.croot)
+
+    return (b, a), sk, (eval, a)
 
 
 if __name__ == '__main__':
 
-    d = 5
+    d = 3
 
     # Generate keys
-    pk, sk = key_gen()
-    print(f"Secret Key:\n{sk}\n")
-    print(f"Public Key 1:\n{pk[0]}\n")
-    print(f"Public Key 2:\n{pk[1]}\n")
+    pk, sk, eval = key_gen()
+    logger.debug(f"Secret Key:\n{sk}\n")
+    logger.debug(f"Public Key 1:\n{pk[0]}\n")
+    logger.debug(f"Public Key 2:\n{pk[1]}\n")
 
     # Encode message
     plain = Plaintext(d)
-    print(f"Plaintext Message:\n{d}\n")
-    print(f"Encoded Message:\n{plain.poly}\n")
+    logger.info(f"Plaintext Message:\n{d}\n")
+    logger.debug(f"Encoded Message:\n{plain.poly}\n")
 
     # Encrypt message
     cipher = Ciphertext(plain, pk[0], pk[1])
-    print(f"Ciphertext 1:\n{cipher.poly[0]}\n")
-    print(f"Ciphertext 2:\n{cipher.poly[1]}\n")
+    logger.debug(f"Ciphertext 1:\n{cipher.poly[0]}\n")
+    logger.debug(f"Ciphertext 2:\n{cipher.poly[1]}\n")
 
     # Decrypt message
     plain = cipher.decrypt(sk)
-    print(f"Decryption:\n{plain}\n")
+    logger.debug(f"Decryption:\n{plain}\n")
 
     # Decode message
-    print(f"Decoding:\n{int(Polynomial(plain)(2))}\n")
+    logger.info(f"Decoding:\n{int(Polynomial(plain)(2))}\n")
+
+    sum = add(cipher, cipher).decrypt(sk)
+    
+    # Decode sum
+    logger.info(f"Decoding:\n{int(Polynomial(sum)(2))}\n")
+
+    prod = mul(cipher, cipher)
+    prod = relin(*prod, eval).decrypt(sk)
+
+    logger.info(f"Decoding:\n{int(Polynomial(prod)(2))}\n")
 
