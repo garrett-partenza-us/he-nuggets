@@ -1,3 +1,5 @@
+# https://eprint.iacr.org/2012/144.pdf
+
 import logging
 import numpy as np
 from numpy.polynomial import Polynomial
@@ -5,7 +7,7 @@ from numpy.polynomial import polynomial as poly
 
 # Set up logging configuration
 logging.basicConfig(
-    level=logging.INFO,  # Set the logging level
+    level=logging.DEBUG,  # Set the logging level
     format='[%(levelname)s] %(message)s\n',
     datefmt='%Y-%m-%d %H:%M:%S',  # Format for date and time
 )
@@ -17,13 +19,14 @@ class Scheme():
 
     # Initialize BFV scheme parameters
     def __init__(self):
-        self.n = 64 # Polynomial degree
-        self.t = 4 # Plaintext coefficient modulus
-        self.q = 65536 # Ciphertext coefficient modulus
+        self.n = 16 # Polynomial degree
+        self.t = 12 # Plaintext coefficient modulus
+        self.q = 8192  # Ciphertext coefficient modulus
+        self.p = self.q ** 3 
         self.m = 0 # Error sampling mean
-        self.s = 3.2 # Error sampling variance
+        self.s = 0 # Error sampling variance
         self.b = 6 * self.s # Error sampling bound
-        self.croot = np.array([1] + [0] * (self.n-1) + [1]) # Cyclotomic root
+        self.croot = Polynomial(np.array([1] + [0] * (self.n-1) + [1])) # Cyclotomic root
 
 
 # GLOBAL params
@@ -51,7 +54,7 @@ class Plaintext():
         """
         bin_pad = self.bin.rjust(config.n, '0')[::-1] # Append zeros for up to degree N
         coeffs = list(int(bit) for bit in bin_pad) # Create polynomial coefficients
-        return np.array(coeffs) # Return as numpy array
+        return Polynomial(np.array(coeffs)) # Return as numpy array
 
 
 class Ciphertext():
@@ -80,13 +83,11 @@ class Ciphertext():
         u = binary_poly(config.n)
         e1 = normal_poly(config.n, config.m, config.s)
         e2 = normal_poly(config.n, config.m, config.s)
-        c1 = polymul(b, u, config.q, config.croot)
-        c1 = polyadd(c1, e1, config.q, config.croot)
-        delta = self.m.poly * np.floor(config.q / config.t)
-        delta = poly.polydiv(delta % config.q, config.croot)[1] % config.q
-        c1 = polyadd(c1, delta, config.q, config.croot)
-        c2 = polymul(a, u, config.q, config.croot)
-        c2 = polyadd(c2, e2, config.q, config.croot)
+        dm = self.m.poly * np.floor(config.q / config.t)
+        c1 = b * u + e1 + dm
+        c1 = modq(c1)
+        c2 = a * u + e2
+        c2 = modq(c2)
         self.c1, self.c2 = c1, c2
         return (c1, c2)
 
@@ -97,54 +98,21 @@ class Ciphertext():
         Parameters:
             sk (np.array): Secret key
         """
-        m = polymul(self.c2, sk, config.q, config.croot)
-        m = polyadd(m, self.c1, config.q, config.croot)
-        m = config.t * m
-        m = m / config.q
-        m = np.round(m).astype(int)
-        m = poly.polydiv(m % config.t, config.croot)[1] % config.t
+        m = modq(self.c1 + self.c2 * sk)
+        m = (config.t * m) / config.q
+        m = Polynomial(np.round(m.coef))
+        m = modt(m)
+        print(m)
         return m
 
 
-def polymul(x, y, modulus, poly_mod):
-    """
-    Multiply two polynomials.
-    
-    Parameters:
-        x (np.array): LHS
-        x (np.array): RHS
-        modulus (int): Coefficient modulus.
-        poly_mod (np.array): Polynomial modulus. 
-    """
-    return np.int64(
-        np.round(
-            poly.polydiv(
-                poly.polymul(x, y) % modulus,
-                poly_mod
-            )[1] % modulus
-        )
-    )
-
-
-def polyadd(x, y, modulus, poly_mod):
-    """
-    Add two polynomials.
-    
-    Parameters:
-        x (np.array): LHS
-        x (np.array): RHS
-        modulus (int): Coefficient modulus.
-        poly_mod (np.array): Polynomial modulus. 
-    """
-    return np.int64(
-        np.round(
-            poly.polydiv(
-                poly.polyadd(x, y) % modulus,
-                poly_mod
-            )[1] % modulus
-        )
-    )
-
+def modt(x):
+    return Polynomial(poly.polydiv(x.coef, config.croot.coef)[1] % config.t)
+def modq(x):
+    return Polynomial(poly.polydiv(x.coef, config.croot.coef)[1] % config.q)
+def modpq(x):
+    return Polynomial(poly.polydiv(x.coef, config.croot.coef)[1] % (config.q *
+                      config.p))
 
 def binary_poly(size):
     """
@@ -153,7 +121,7 @@ def binary_poly(size):
     Parameters:
         size (int): Desired polynomial degree
     """
-    return np.random.randint(0, 2, size, dtype=np.int64)
+    return Polynomial(np.random.randint(0, 2, size, dtype=np.int64))
 
 
 def uniform_poly(size, modulus):
@@ -164,7 +132,7 @@ def uniform_poly(size, modulus):
         size (int): Desired polynomial degree
         modulus (int): Maximum coefficient
     """
-    return np.random.randint(0, modulus, size, dtype=np.int64)
+    return Polynomial(np.random.randint(0, modulus, size, dtype=np.int64))
 
 
 def normal_poly(size, mean, sigma):
@@ -176,7 +144,7 @@ def normal_poly(size, mean, sigma):
         mean (int): Mean
         sigma (float): Variance
     """
-    return np.clip(
+    return Polynomial(np.clip(
                 np.int64(
                     np.random.normal(
                         mean,
@@ -184,50 +152,48 @@ def normal_poly(size, mean, sigma):
                         size=size
                     )
                 ), min=np.ceil(config.b/2), max=np.floor(config.b/2)
-            )
+            ))
 
 def add(x, y):
 
     x_1, x_2 = x.poly
     y_1, y_2 = y.poly
-    sum_1 = polyadd(x_1, y_1, config.q, config.croot)
-    sum_2 = polyadd(x_2, y_2, config.q, config.croot)
+    sum_1 = modq(x_1 + y_1)
+    sum_2 = modq(x_2 + y_2)
     res = Ciphertext(init=False)
     res.c1, res.c2 = sum_1, sum_2
     return res
 
 def mul(x, y):
-    
+
     x1, x2 = x.poly
     y1, y2 = y.poly
 
-    c1n = (polymul(x1, x2, config.q, config.croot) * config.t) / config.q
-    c2n = (polyadd(
-            polymul(x1, y2, config.q, config.croot),
-            polymul(y1, x2, config.q, config.croot),
-            config.q,
-            config.croot
-        ) * config.t) / config.q
-    c3n = (polymul(y1, y2, config.q, config.croot) * config.t) / config.q
+    # Compute the tensor product and scale
+    c1 = (config.t * (x1 * y1)) / config.q
+    c2 = (config.t * (x1 * y2 + x2 * y1)) / config.q
+    c3 = (config.t * (x2 * y2)) / config.q
 
-    c1 = np.round(c1n).astype(np.int64) % config.q
-    c2 = np.round(c2n).astype(np.int64)% config.q
-    c3 = np.round(c3n).astype(np.int64) % config.q
+    c1 = Polynomial(np.round(c1.coef))
+    c2 = Polynomial(np.round(c2.coef))
+    c3 = Polynomial(np.round(c3.coef))
+
+    c1 = modq(c1)
+    c2 = modq(c2)
+    c3 = modq(c3)
 
     return (c1, c2, c3)
 
-def relin(c1, c2, c3, eval):
-    eval, a = eval
+def relin(c1, c2, c3, evk):
 
-    c1_hat = polymul(eval, c3, config.q, config.croot)
-    c1_hat = polyadd(c1_hat, c1, config.q, config.croot)
+    c3_0 = modq(Polynomial(np.round(((c3 * evk[0]) / config.p).coef)))
+    c3_1 = modq(Polynomial(np.round(((c3 * evk[1]) / config.p).coef)))
 
-    c2_hat = polymul(a, c3, config.q, config.croot)
-    c2_hat = polyadd(c2_hat, c2, config.q, config.croot)
+    c1_hat = modq(c1 + c3_0)
+    c2_hat = modq(c2 + c3_1)
 
     res = Ciphertext(init=False)
     res.c1, res.c2 = c1_hat, c2_hat
-    
     return res
 
 def key_gen():
@@ -240,22 +206,22 @@ def key_gen():
     # Public
     a = uniform_poly(config.n, config.q)
     e = normal_poly(config.n, config.m, config.s)
-    b = polyadd(polymul(-a, sk, config.q, config.croot), -e, config.q, config.croot)
+    b = -((a * sk) + e)
+    b = modq(b)
+
 
     # Eval
-    eval = polymul(a, sk, config.q, config.croot)
-    eval = polyadd(eval, e, config.q, config.croot)
-    eval = -1 * eval
-    eval = poly.polydiv(eval % config.q, config.croot)[1] % config.q
-    sk2 = polymul(sk, sk, config.q, config.croot)
-    eval = polyadd(eval, sk2, config.q, config.croot)
+    a_evk = uniform_poly(config.n, config.q * config.p)
+    e = normal_poly(config.n, config.m, config.s)
+    evk = -1 * (a_evk * sk + e) + config.p * (sk * sk)
+    evk = modpq(evk)
 
-    return (b, a), sk, (eval, a)
+    return (b, a), sk, (evk, a_evk)
 
 
 if __name__ == '__main__':
 
-    d = 3
+    d = 5
 
     # Generate keys
     pk, sk, eval = key_gen()
@@ -278,15 +244,15 @@ if __name__ == '__main__':
     logger.debug(f"Decryption:\n{plain}\n")
 
     # Decode message
-    logger.info(f"Decoding:\n{int(Polynomial(plain)(2))}\n")
-
+    logger.info(f"Decoding:\n{int(plain(2))}\n")
+    
     sum = add(cipher, cipher).decrypt(sk)
     
     # Decode sum
-    logger.info(f"Decoding:\n{int(Polynomial(sum)(2))}\n")
+    logger.info(f"Decoding:\n{int(sum(2))}\n")
 
     prod = mul(cipher, cipher)
-    prod = relin(*prod, eval).decrypt(sk)
+    c1, c2, c3 = prod
+    prod = relin(c1, c2, c3, eval).decrypt(sk)
 
-    logger.info(f"Decoding:\n{int(Polynomial(prod)(2))}\n")
-
+    logger.info(f"Decoding:\n{int(prod(2))}\n")
