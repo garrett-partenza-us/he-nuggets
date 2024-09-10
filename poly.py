@@ -284,6 +284,36 @@ class Polynomial:
         w_matrix = w_transform(w_matrix)
         return np.dot(self.n_inv * w_matrix, coef) % self.mod
 
+    def fast_ntt(self, coef):
+
+        result = np.zeros(self.n)
+
+        for j in range(self.n // 2):
+
+            Aj = 0
+            Bj = 0
+
+            for i in range(self.n // 2):
+                Aj += pow(self.w2, 4*i*j+2*i, self.mod) * coef[2*i]
+                Bj += pow(self.w2, 4*i*j+2*i, self.mod) * coef[2*i+1]
+
+            coef[j] = Aj + pow(self.w2, 2*j+1, self.mod) * Bj
+            coef[j+self.n//2] = Aj - pow(self.w2, 2*j+1, self.mod) * Bj
+
+            coef[j] = coef[j] % self.mod
+            coef[j+self.n//2] = coef[j+self.n//2] % self.mod
+
+        return coef
+
+    def fast_ntt_compute(self, coef, j, i):
+
+
+
+
+
+
+
+
 
     def __str__(self):
         """
