@@ -284,9 +284,10 @@ class Polynomial:
         w_matrix = w_transform(w_matrix)
         return np.dot(self.n_inv * w_matrix, coef) % self.mod
 
-    def fast_ntt(self, coef):
 
-        result = np.zeros(self.n)
+    def fast_ntt(self):
+
+        coef = np.zeros(self.n)
 
         for j in range(self.n // 2):
 
@@ -294,8 +295,13 @@ class Polynomial:
             Bj = 0
 
             for i in range(self.n // 2):
-                Aj += pow(self.w2, 4*i*j+2*i, self.mod) * coef[2*i]
-                Bj += pow(self.w2, 4*i*j+2*i, self.mod) * coef[2*i+1]
+                
+                # O(n**2)
+                #Aj += pow(self.w2, 4*i*j+2*i, self.mod) * self.coef[2*i]
+                #Bj += pow(self.w2, 4*i*j+2*i, self.mod) * self.coef[2*i+1]
+
+                # O(nlogn)
+                Aj, Bj = self.ntt_helper(0, self.n // 2, j)
 
             coef[j] = Aj + pow(self.w2, 2*j+1, self.mod) * Bj
             coef[j+self.n//2] = Aj - pow(self.w2, 2*j+1, self.mod) * Bj
@@ -305,14 +311,28 @@ class Polynomial:
 
         return coef
 
-    def fast_ntt_compute(self, coef, j, i):
+    def ntt_helper(self, start, end, j):
+        
+        # Base case
+        if start >= end:
+            return (0, 0)
 
+        # Processing case
+        if start + 1 == end:
+            i = start
+            pow_value = pow(self.w2, 4*i*j + 2*i, self.mod)
+            return (self.coef[2*i] * pow_value, self.coef[2*i+1] * pow_value)
 
+        # Recurssive case
+        mid = (start + end) // 2
+        Aj1, Bj1 = self.ntt_helper(start, mid, j)
+        Aj2, Bj2 = self.ntt_helper(mid, end, j)
 
+        # Combine results
+        Aj = Aj1 + Aj2
+        Bj = Bj1 + Bj2
 
-
-
-
+        return (Aj, Bj)
 
 
     def __str__(self):
